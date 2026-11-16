@@ -147,6 +147,11 @@ bool ModernMenuSidebarEntry(std::string label) {
     pos.y += style.FramePadding.y;
     pos.x = window->WorkRect.GetCenter().x - labelSize.x / 2;
     ImRect bb = { pos - style.FramePadding, pos + labelSize + style.FramePadding };
+#if defined(__IOS__) && !defined(__TVOS__)
+    // On a phone the whole row is the target, not just the word.
+    bb.Min.x = window->WorkRect.Min.x;
+    bb.Max.x = window->WorkRect.Max.x;
+#endif
     ImGui::ItemSize(bb, style.FramePadding.y);
     ImGui::ItemAdd(bb, sidebarId);
     bool hovered, held;
@@ -154,7 +159,7 @@ bool ModernMenuSidebarEntry(std::string label) {
     if (pressed) {
         ImGui::MarkItemEdited(sidebarId);
     }
-    window->DrawList->AddRectFilled(pos - style.FramePadding, pos + labelSize + style.FramePadding,
+    window->DrawList->AddRectFilled(bb.Min, bb.Max,
                                     ImGui::GetColorU32((held && hovered) ? ImGuiCol_ButtonActive
                                                        : hovered         ? ImGuiCol_ButtonHovered
                                                                          : ImGuiCol_Button),
@@ -706,10 +711,19 @@ void Menu::DrawElement() {
     float headerHeight = headerSizes.at(0).y + style.FramePadding.y * 2;
     ImVec2 buttonSize = ImGui::CalcTextSize(ICON_FA_TIMES_CIRCLE) + style.FramePadding * 2;
     ImGui::SameLine();
-    float headerAvailableWidth = std::max(0.0f, menuSize.x - buttonSize.x * 3 - style.ItemSpacing.x * 3);
+    // Room kept between the tabs and the red Quit/Reset buttons so a near miss never lands on them.
+    float headerButtonGap = 0.0f;
+    ImGuiWindowFlags headerScrollFlags = ImGuiWindowFlags_NoScrollbar;
+#if defined(__IOS__) && !defined(__TVOS__)
+    headerButtonGap = ImGui::GetFontSize();
+    // The tab strip slides sideways under a finger (see TouchMenuInput.h).
+    headerScrollFlags |= ImGuiWindowFlags_HorizontalScrollbar;
+#endif
+    float headerAvailableWidth =
+        std::max(0.0f, menuSize.x - buttonSize.x * 3 - style.ItemSpacing.x * 3 - headerButtonGap);
     ImVec2 headerSelSize = { headerAvailableWidth, headerHeight };
     ImGui::BeginChild("Header Selection", headerSelSize, ImGuiChildFlags_None,
-                      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar);
+                      ImGuiWindowFlags_NoTitleBar | headerScrollFlags);
     uint8_t curIndex = 0;
     for (auto& label : menuOrder) {
         if (curIndex != 0) {
@@ -721,7 +735,8 @@ void Menu::DrawElement() {
         if (headerIndex != label) {
             ImGui::PushStyleColor(ImGuiCol_Button, { 0, 0, 0, 0 });
         }
-        if (ModernMenuHeaderEntry(entry.label)) {
+        bool headerPressed = ModernMenuHeaderEntry(entry.label);
+        if (headerPressed) {
             if (headerSearch) {
                 menuSearch.Clear();
             }
@@ -729,6 +744,12 @@ void Menu::DrawElement() {
             CVarSave();
             nextIndex = label;
         }
+#if defined(__IOS__) && !defined(__TVOS__)
+        // Bring the current tab into view when the menu opens or a tab is chosen.
+        if ((headerIndex == label && freshOpen) || headerPressed) {
+            ImGui::SetScrollHereX(0.5f);
+        }
+#endif
         if (headerIndex != label) {
             ImGui::PopStyleColor();
         }
@@ -762,6 +783,25 @@ void Menu::DrawElement() {
         ImGui::PopStyleVar();
         ImGui::PopStyleColor();
     }
+#if defined(__IOS__) && !defined(__TVOS__)
+    {
+        // The tab strip slides sideways. Fade the edge where more tabs are hidden, so it reads as "there's more".
+        ImGuiWindow* strip = ImGui::GetCurrentWindow();
+        const ImRect r = strip->InnerRect;
+        const float fade = ImGui::GetFontSize() * 2.5f;
+        const ImU32 solid = ImGui::GetColorU32(ImVec4(0, 0, 0, 0.9f));
+        const ImU32 clear = ImGui::GetColorU32(ImVec4(0, 0, 0, 0.0f));
+        ImDrawList* dl = strip->DrawList;
+        dl->PushClipRect(r.Min, r.Max);
+        if (ImGui::GetScrollX() < ImGui::GetScrollMaxX() - 1.0f) {
+            dl->AddRectFilledMultiColor({ r.Max.x - fade, r.Min.y }, r.Max, clear, solid, solid, clear);
+        }
+        if (ImGui::GetScrollX() > 1.0f) {
+            dl->AddRectFilledMultiColor(r.Min, { r.Min.x + fade, r.Max.y }, solid, clear, clear, solid);
+        }
+        dl->PopClipRect();
+    }
+#endif
     ImGui::EndChild();
 #ifdef __TVOS__
     if (tvosNavigationRegion == TvosMenuNavigationRegion::Header) {
@@ -803,9 +843,21 @@ void Menu::DrawElement() {
 #endif
         ;
     if (UIWidgets::Button(ICON_FA_UNDO, options2)) {
+#if defined(__IOS__) && !defined(__TVOS__)
+        // Reset sits next to the tabs; on a touch screen a slip should not throw away progress.
+        BenGui::mModalWindow->RegisterPopup(
+            "Reset", "Reset the game? Anything not saved will be lost.", "Reset", "Cancel",
+            []() {
+                std::reinterpret_pointer_cast<Ship::ConsoleWindow>(
+                    Ship::Context::GetInstance()->GetWindow()->GetGui()->GetGuiWindow("Console"))
+                    ->Dispatch("reset");
+            },
+            nullptr);
+#else
         std::reinterpret_pointer_cast<Ship::ConsoleWindow>(
             Ship::Context::GetInstance()->GetWindow()->GetGui()->GetGuiWindow("Console"))
             ->Dispatch("reset");
+#endif
     }
     ImGui::SameLine();
     UIWidgets::ButtonOptions options3 = {};

@@ -1,5 +1,6 @@
 #define NOMINMAX
 
+#include "ship/window/gui/TouchMenuInput.h"
 #include "ship/window/gui/Gui.h"
 
 #include <cstring>
@@ -330,45 +331,34 @@ void Gui::HandleWindowEvents(WindowEvent event) {
         case WindowBackend::FAST3D_SDL_OPENGL:
         case WindowBackend::FAST3D_SDL_METAL: {
             const SDL_Event* sdlEvent = static_cast<const SDL_Event*>(event.Sdl.Event);
-#if defined(__IOS__)
+#if defined(__IOS__) && !defined(__TVOS__)
             // SDL only turns the primary iOS finger into mouse events. Track the
             // raw finger stream as well so two-finger menu scrolling works.
             static std::unordered_set<SDL_FingerID> activeTouchFingers;
-            static bool twoFingerScrolling = false;
             if (sdlEvent->type == SDL_FINGERDOWN) {
                 activeTouchFingers.insert(sdlEvent->tfinger.fingerId);
                 if (activeTouchFingers.size() >= 2) {
-                    twoFingerScrolling = true;
                     // Cancel any slider/button press claimed by the first
                     // finger when the gesture becomes a two-finger scroll.
+                    TouchMenuInput::Cancel();
                     mImGuiIo->AddMouseButtonEvent(ImGuiMouseButton_Left, false);
                 }
             } else if (sdlEvent->type == SDL_FINGERUP) {
                 activeTouchFingers.erase(sdlEvent->tfinger.fingerId);
-                if (activeTouchFingers.size() < 2) {
-                    twoFingerScrolling = false;
-                }
             }
-#endif
-            ImGui_ImplSDL2_ProcessEvent(sdlEvent);
-#if defined(__IOS__)
-            // SDL converts a primary iOS finger into touch-sourced mouse events.
-            // ImGui supports taps but does not turn a finger drag into wheel
-            // scrolling, so translate vertical drags that begin on non-active
-            // menu content into natural direct scrolling.
-            if (!twoFingerScrolling &&
-                sdlEvent->type == SDL_MOUSEMOTION &&
-                sdlEvent->motion.which == SDL_TOUCH_MOUSEID &&
-                (sdlEvent->motion.state & SDL_BUTTON_LMASK) != 0 &&
-                !ImGui::IsAnyItemActive()) {
-                mImGuiIo->AddMouseSourceEvent(ImGuiMouseSource_TouchScreen);
-                mImGuiIo->AddMouseWheelEvent(0.0f, sdlEvent->motion.yrel / 24.0f);
+            // One finger in the menu: tap presses, drag scrolls, hold grabs (see TouchMenuInput.h).
+            const bool touchHandled = activeTouchFingers.size() < 2 &&
+                                      TouchMenuInput::HandleSdlEvent(sdlEvent, GetMenuOrMenubarVisible());
+            if (!touchHandled) {
+                ImGui_ImplSDL2_ProcessEvent(sdlEvent);
             }
-            if (twoFingerScrolling && sdlEvent->type == SDL_FINGERMOTION) {
+            if (activeTouchFingers.size() >= 2 && sdlEvent->type == SDL_FINGERMOTION) {
                 mImGuiIo->AddMouseSourceEvent(ImGuiMouseSource_TouchScreen);
                 const float dragPixels = sdlEvent->tfinger.dy * mImGuiIo->DisplaySize.y;
                 mImGuiIo->AddMouseWheelEvent(0.0f, dragPixels / 24.0f);
             }
+#else
+            ImGui_ImplSDL2_ProcessEvent(sdlEvent);
 #endif
 #if defined(__ANDROID__) || defined(__IOS__)
             Mobile::ImGuiProcessEvent(mImGuiIo->WantTextInput);
@@ -780,7 +770,13 @@ void Gui::StartFrame() {
     // Restore it so NavUpdate accepts platform-injected menu navigation events.
     mImGuiIo->BackendFlags |= ImGuiBackendFlags_HasGamepad;
 #endif
+#if defined(__IOS__) && !defined(__TVOS__)
+    TouchMenuInput::BeforeNewFrame();
+#endif
     ImGui::NewFrame();
+#if defined(__IOS__) && !defined(__TVOS__)
+    TouchMenuInput::AfterNewFrame();
+#endif
 }
 
 void Gui::EndFrame() {

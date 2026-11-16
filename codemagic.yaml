@@ -1,0 +1,53 @@
+# Codemagic build for the touch-friendly iPhone menus, the same treatment as Justin's
+# Ship of Harkinian build (nerdfirestudio/Shipwright-Ports, branch iphone-menus).
+workflows:
+  ios-touch-menus:
+    name: iPhone menu build
+    instance_type: mac_mini_m2
+    max_build_duration: 120
+    environment:
+      # Pinned to what the published 5.0.0 IPA was built with (Xcode 15.4, iOS 17.5 SDK).
+      xcode: 15.4
+      vars:
+        TWO_SHIP_IOS_VERSION: 5.0.0
+        # Higher than the published build (1) so it installs over it and keeps saves.
+        TWO_SHIP_IOS_BUILD_NUMBER: "2"
+        CMAKE_BUILD_PARALLEL_LEVEL: "4"
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: iphone-menus
+          include: true
+          source: true
+    scripts:
+      - name: Build tools
+        script: brew install cmake ninja pkg-config
+      # Homebrew's Mac libraries get picked over the iPhone ones and the final link fails on the
+      # Mac zlib/bzip2 (Ship of Harkinian builds #2-#4). Remove them so ios.cmake builds its own.
+      - name: Remove Mac-only Homebrew libraries
+        script: |
+          for f in libzip libpng sdl2 spdlog fmt tinyxml2 nlohmann-json glew zlib bzip2 libogg libvorbis opus opusfile; do
+            if brew list --versions "$f" >/dev/null 2>&1; then brew uninstall --ignore-dependencies --force "$f"; fi
+          done
+      # The ROM-free support archive comes from the published 5.0.0 IPA (same source tree),
+      # so the Mac-side archive generator isn't needed here.
+      - name: Get ROM-free support archive (2ship.o2r)
+        script: |
+          curl -fsSL -o /tmp/2ship-release.ipa https://github.com/linkzenic/2ship2harkinian-ios/releases/download/v5.0.0-ios.1/2Ship-2-Harkinian-iOS-unsigned.ipa
+          unzip -p /tmp/2ship-release.ipa 'Payload/2Ship 2 Harkinian.app/2ship.o2r' > mm/2ship.o2r
+          ls -la mm/2ship.o2r
+      - name: Build iPhone app
+        script: |
+          # CMake 4 takes the SDK from SDKROOT when nothing sets CMAKE_OSX_SYSROOT; unset, it links
+          # the Mac SDK's zlib/bzip2.
+          export SDKROOT="$(xcrun --sdk iphoneos --show-sdk-path)"
+          echo "SDKROOT=$SDKROOT"
+          TWO_SHIP_O2R_PATH="$CM_BUILD_DIR/mm/2ship.o2r" scripts/build-ios.sh --device || {
+            grep -iE "^(libzip|ZLIB|BZIP2|SDL2|PNG)[A-Z_]*(DIR|LIBRARY[A-Z_]*):" build-ios-device/CMakeCache.txt || true
+            exit 1
+          }
+      - name: Package unsigned IPA
+        script: scripts/package-ios-unsigned.sh 'build-ios-device/mm/Release-iphoneos/2Ship 2 Harkinian.app' 'dist/2Ship-2-Harkinian-5.0.0-iOS-touch-menus-unsigned.ipa'
+    artifacts:
+      - dist/*.ipa
