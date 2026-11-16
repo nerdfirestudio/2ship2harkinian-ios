@@ -6,8 +6,9 @@ workflows:
     instance_type: mac_mini_m2
     max_build_duration: 120
     environment:
-      # Pinned to what the published 5.0.0 IPA was built with (Xcode 15.4, iOS 17.5 SDK).
-      xcode: 15.4
+      # The published 5.0.0 IPA used Xcode 15.4, which Codemagic no longer offers. 16.4 built the
+      # Ship of Harkinian IPA; Xcode 26 breaks the AudioToolbox headers.
+      xcode: 16.4
       vars:
         TWO_SHIP_IOS_VERSION: 5.0.0
         # Higher than the published build (1) so it installs over it and keeps saves.
